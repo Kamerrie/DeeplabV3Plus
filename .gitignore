@@ -2,4 +2,4 @@
 *.jpg
 *.png
 *.xml
-*.weights.h5
+*.h5

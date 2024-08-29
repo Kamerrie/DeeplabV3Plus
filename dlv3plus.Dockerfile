@@ -7,7 +7,9 @@ WORKDIR /app
 # Copy the requirements file to the working directory
 COPY requirements.txt /app/
 
-RUN apt-get install -y git
+RUN apt-get update && apt-get install -y \
+    git \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 # Install Python dependencies
 RUN pip install --upgrade pip && \
     pip install -r requirements.txt

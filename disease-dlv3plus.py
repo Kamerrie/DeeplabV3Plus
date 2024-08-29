@@ -75,7 +75,7 @@ def resize_and_pad_image(image, min_dim, max_dim, is_mask=False):
 
     # Correct padding argument format
     paddings = [[top, bottom], [left, right], [0, 0]]
-    image = tf.pad(image, paddings, "CONSTANT", constant_values=0 if is_mask else 0)
+    image = tf.pad(image, paddings, "CONSTANT", constant_values=0)
 
     return image
 

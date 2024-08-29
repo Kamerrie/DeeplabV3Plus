@@ -4,6 +4,11 @@ FROM tensorflow/tensorflow:2.16.1-gpu
 # Set the working directory in the container
 WORKDIR /app
 
+# Settings some env vars for tensorflow, logs, and memory management
+ENV TF_GPU_ALLOCATOR=cuda_malloc_async
+ENV PYTHONUNBUFFERED=1
+ENV TF_CPP_MIN_LOG_LEVEL=2
+ENV TF_FORCE_GPU_ALLOW_GROWTH=true
 # Copy the requirements file to the working directory
 COPY requirements.txt /app/
 

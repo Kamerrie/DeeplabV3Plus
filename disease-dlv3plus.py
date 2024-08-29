@@ -4,12 +4,16 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 import keras_cv
+from datetime import datetime
 
 # Set paths and configurations
 DATASET_DIR = os.path.join(os.getcwd(), "data")
 TRAIN_DIR = os.path.join(DATASET_DIR, "train")
 VAL_DIR = os.path.join(DATASET_DIR, "val")
 TEST_DIR = os.path.join(DATASET_DIR, "test")
+
+LOG_SAVE_DIR = os.path.join(os.getcwd(), "dlv3plus", "logs")
+MODEL_SAVE_DIR = os.path.join(os.getcwd(), "dlv3plus", "models")
 
 # Set up directories for train, validation, and test images and masks
 train_images_dir = os.path.join(TRAIN_DIR, "images")
@@ -89,17 +93,61 @@ base_model.compile(
     metrics=["accuracy"]
 )
 
+# Custom callback to log metrics to a file and print them
+class MetricsCallback(keras.callbacks.Callback):
+    def __init__(self, log_file):
+        super(MetricsCallback, self).__init__()
+        self.log_file = log_file
+        self.start_time = None
+        
+        # Initialize the log file with headers if it doesn't exist
+        if not os.path.exists(self.log_file):
+            with open(self.log_file, 'w') as f:
+                f.write("start_time,epoch,end_time,epoch_duration,loss,val_loss,mean_iou,mean_precision,mean_recall,mean_f1_score\n")
+
+    def on_epoch_begin(self, epoch, logs=None):
+        # Record the start time of the epoch
+        self.start_time = datetime.now()
+
+    def on_epoch_end(self, epoch, logs=None):
+        end_time = datetime.now()
+        epoch_duration = (end_time - self.start_time).total_seconds()
+        start_time_formatted = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
+        end_time_formatted = end_time.strftime("%Y-%m-%d %H:%M:%S")
+
+        # Calculate additional metrics if needed (e.g., IoU, precision, recall, F1 score)
+        mean_iou = logs.get('mean_iou', 'N/A')
+        mean_precision = logs.get('mean_precision', 'N/A')
+        mean_recall = logs.get('mean_recall', 'N/A')
+        mean_f1_score = logs.get('mean_f1_score', 'N/A')
+        loss = logs.get('loss', 'N/A')
+        val_loss = logs.get('val_loss', 'N/A')
+
+        # Print logs to screen
+        print(f"Epoch {epoch + 1} - Logs: {logs}")
+
+        # Log the metrics to the file
+        with open(self.log_file, 'a') as f:
+            f.write(f"{start_time_formatted},{epoch + 1},{end_time_formatted},{epoch_duration:.2f},{loss},{val_loss},{mean_iou},{mean_precision},{mean_recall},{mean_f1_score}\n")
+
+        print(f"Logged metrics for epoch {epoch + 1}")
+
+os.makedirs(LOG_SAVE_DIR, exist_ok=True)
+log_file_path = os.path.join(LOG_SAVE_DIR, "training_log.csv")
+
+# Callback instance
+metrics_callback = MetricsCallback(log_file=log_file_path)
+
 print('training will start')
-# Train the model
+# Train the model with the custom callback
 base_model.fit(
     train_dataset,
     validation_data=val_dataset,
     epochs=EPOCHS,
+    callbacks=[metrics_callback]
 )
 print('training done')
 
-# Save the model after training
-MODEL_SAVE_DIR = os.path.join(os.getcwd(), "dlv3plus", "models")
 os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
 base_model.save(os.path.join(MODEL_SAVE_DIR, "deeplabv3plus_model.h5"))
 

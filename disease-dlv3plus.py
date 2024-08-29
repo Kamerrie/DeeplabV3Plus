@@ -2,7 +2,6 @@ import os
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
-from tensorflow.keras import layers
 import keras_cv
 from datetime import datetime
 
@@ -32,14 +31,15 @@ IMAGE_MAX_DIM = 1024
 NUM_CLASSES = 2  # Adjust this according to your dataset
 
 # Function to load and resize images and masks according to configuration
-def load_images_and_masks(images_dir, masks_dir, img_size=(IMAGE_MAX_DIM, IMAGE_MAX_DIM), min_dim=IMAGE_MIN_DIM, max_dim=IMAGE_MAX_DIM):
+def load_images_and_masks(images_dir, masks_dir, min_dim=IMAGE_MIN_DIM, max_dim=IMAGE_MAX_DIM):
     image_paths = sorted([os.path.join(images_dir, fname) for fname in os.listdir(images_dir) if fname.endswith(".jpg") or fname.endswith(".png")])
     mask_paths = sorted([os.path.join(masks_dir, fname) for fname in os.listdir(masks_dir) if fname.endswith(".jpg") or fname.endswith(".png")])
 
-    images = np.zeros((len(image_paths), img_size[0], img_size[1], 3), dtype=np.uint8)
-    masks = np.zeros((len(mask_paths), img_size[0], img_size[1], 1), dtype=np.uint8)
+    # Initialize lists to store resized images and masks
+    images = []
+    masks = []
 
-    for i, (img_path, mask_path) in enumerate(zip(image_paths, mask_paths)):
+    for img_path, mask_path in zip(image_paths, mask_paths):
         img = tf.keras.preprocessing.image.load_img(img_path)
         img = tf.keras.preprocessing.image.img_to_array(img)
 
@@ -50,8 +50,13 @@ def load_images_and_masks(images_dir, masks_dir, img_size=(IMAGE_MAX_DIM, IMAGE_
         img = resize_and_pad_image(img, min_dim, max_dim)
         mask = resize_and_pad_image(mask, min_dim, max_dim, is_mask=True)
 
-        images[i] = img
-        masks[i] = mask
+        # Append resized and padded images and masks to the list
+        images.append(img)
+        masks.append(mask)
+
+    # Convert lists to numpy arrays
+    images = np.array(images, dtype=np.uint8)
+    masks = np.array(masks, dtype=np.uint8)
 
     return images, masks
 

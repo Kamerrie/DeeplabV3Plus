@@ -26,13 +26,13 @@ train_batch_size = len(os.listdir(train_images_dir))
 val_batch_size = len(os.listdir(val_images_dir))
 
 # Hyperparameters and configuration
-EPOCHS = 50  # Adjust as needed
-IMG_HEIGHT = 512
-IMG_WIDTH = 512
+EPOCHS = 100  # Adjust as needed
+IMAGE_MIN_DIM = 800
+IMAGE_MAX_DIM = 1024
 NUM_CLASSES = 2  # Adjust this according to your dataset
 
-# Function to load images and masks
-def load_images_and_masks(images_dir, masks_dir, img_size=(IMG_HEIGHT, IMG_WIDTH)):
+# Function to load and resize images and masks according to configuration
+def load_images_and_masks(images_dir, masks_dir, img_size=(IMAGE_MAX_DIM, IMAGE_MAX_DIM), min_dim=IMAGE_MIN_DIM, max_dim=IMAGE_MAX_DIM):
     image_paths = sorted([os.path.join(images_dir, fname) for fname in os.listdir(images_dir) if fname.endswith(".jpg") or fname.endswith(".png")])
     mask_paths = sorted([os.path.join(masks_dir, fname) for fname in os.listdir(masks_dir) if fname.endswith(".jpg") or fname.endswith(".png")])
 
@@ -40,15 +40,45 @@ def load_images_and_masks(images_dir, masks_dir, img_size=(IMG_HEIGHT, IMG_WIDTH
     masks = np.zeros((len(mask_paths), img_size[0], img_size[1], 1), dtype=np.uint8)
 
     for i, (img_path, mask_path) in enumerate(zip(image_paths, mask_paths)):
-        img = tf.keras.preprocessing.image.load_img(img_path, target_size=img_size)
+        img = tf.keras.preprocessing.image.load_img(img_path)
         img = tf.keras.preprocessing.image.img_to_array(img)
-        mask = tf.keras.preprocessing.image.load_img(mask_path, color_mode="grayscale", target_size=img_size)
+
+        mask = tf.keras.preprocessing.image.load_img(mask_path, color_mode="grayscale")
         mask = tf.keras.preprocessing.image.img_to_array(mask)
+
+        # Resize image and mask according to the IMAGE_MIN_DIM and IMAGE_MAX_DIM
+        img = resize_and_pad_image(img, min_dim, max_dim)
+        mask = resize_and_pad_image(mask, min_dim, max_dim, is_mask=True)
 
         images[i] = img
         masks[i] = mask
 
     return images, masks
+
+def resize_and_pad_image(image, min_dim, max_dim, is_mask=False):
+    """
+    Resize an image keeping the aspect ratio unchanged and pad it to have a square shape.
+    """
+    image_shape = image.shape[:2]
+    scale = min_dim / min(image_shape)
+    if max(image_shape) * scale > max_dim:
+        scale = max_dim / max(image_shape)
+    
+    new_size = (int(round(image_shape[1] * scale)), int(round(image_shape[0] * scale)))
+    image = tf.image.resize(image, new_size, method='nearest' if is_mask else 'bilinear')
+
+    # Padding to square
+    delta_w = max_dim - new_size[0]
+    delta_h = max_dim - new_size[1]
+    top, bottom = delta_h // 2, delta_h - (delta_h // 2)
+    left, right = delta_w // 2, delta_w - (delta_w // 2)
+
+    if is_mask:
+        image = tf.pad(image, [[top, bottom], [left, right], [0]], "CONSTANT", constant_values=0)
+    else:
+        image = tf.pad(image, [[top, bottom], [left, right], [0]], "CONSTANT", constant_values=0)
+
+    return image
 
 print('loading datasets')
 # Load training and validation datasets

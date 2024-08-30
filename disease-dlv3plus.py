@@ -1,7 +1,6 @@
 import os
 import numpy as np
 import tensorflow as tf
-from tensorflow import keras
 import keras_cv
 from datetime import datetime
 
@@ -31,80 +30,47 @@ IMAGE_MAX_DIM = 1024
 NUM_CLASSES = 2  # Adjust this according to your dataset
 
 # Function to load and resize images and masks according to configuration
-def load_images_and_masks(images_dir, masks_dir, img_size=(IMAGE_MAX_DIM, IMAGE_MAX_DIM), min_dim=IMAGE_MIN_DIM, max_dim=IMAGE_MAX_DIM):
-    image_paths = sorted([os.path.join(images_dir, fname) for fname in os.listdir(images_dir) if fname.endswith(".jpg") or fname.endswith(".png")])
-    mask_paths = sorted([os.path.join(masks_dir, fname) for fname in os.listdir(masks_dir) if fname.endswith(".jpg") or fname.endswith(".png")])
+def load_image(image_path, mask=False):
+    img = tf.keras.preprocessing.image.load_img(image_path.numpy().decode("utf-8"), color_mode="grayscale" if mask else "rgb")
+    img = tf.keras.preprocessing.image.img_to_array(img)
+    return img
 
-    images = []
-    masks = []
+def parse_function(image_path, mask_path):
+    image = tf.py_function(load_image, [image_path], tf.float32)
+    mask = tf.py_function(load_image, [mask_path, True], tf.float32)
 
-    for i, (img_path, mask_path) in enumerate(zip(image_paths, mask_paths)):
-        img = tf.keras.preprocessing.image.load_img(img_path)
-        img = tf.keras.preprocessing.image.img_to_array(img)
-
-        mask = tf.keras.preprocessing.image.load_img(mask_path, color_mode="grayscale")
-        mask = tf.keras.preprocessing.image.img_to_array(mask)
-
-        # Resize image and mask according to the IMAGE_MIN_DIM and IMAGE_MAX_DIM
-        img = resize_and_pad_image(img, min_dim, max_dim)
-        mask = resize_and_pad_image(mask, min_dim, max_dim, is_mask=True)
-
-        images.append(img)
-        masks.append(mask)
-
-    # Convert the list of images and masks to numpy arrays
-    images = np.array(images, dtype=np.uint8)
-    masks = np.array(masks, dtype=np.uint8)
-
-    return images, masks
-
-def resize_and_pad_image(image, min_dim, max_dim, is_mask=False):
-    """
-    Resize an image keeping the aspect ratio unchanged and pad it to have a square shape.
-    """
-    image_shape = image.shape[:2]
-    scale = min_dim / min(image_shape)
-    if max(image_shape) * scale > max_dim:
-        scale = max_dim / max(image_shape)
+    # Set the shape of the images manually
+    image.set_shape([None, None, 3])
+    mask.set_shape([None, None, 1])
     
-    new_size = (int(round(image_shape[1] * scale)), int(round(image_shape[0] * scale)))
-    image = tf.image.resize(image, new_size, method='nearest' if is_mask else 'bilinear')
+    # Resize image and mask to a consistent size (IMAGE_MAX_DIM x IMAGE_MAX_DIM)
+    image = tf.image.resize(image, [IMAGE_MAX_DIM, IMAGE_MAX_DIM], method='bilinear')
+    mask = tf.image.resize(mask, [IMAGE_MAX_DIM, IMAGE_MAX_DIM], method='nearest')
+    
+    # Normalize images and masks
+    image = image / 255.0
+    mask = mask / 255.0
 
-    # Padding to square
-    delta_w = max_dim - new_size[0]
-    delta_h = max_dim - new_size[1]
-    top, bottom = delta_h // 2, delta_h - (delta_h // 2)
-    left, right = delta_w // 2, delta_w - (delta_w // 2)
+    return image, mask
 
-    # Correct padding argument format
-    paddings = [[top, bottom], [left, right], [0, 0]]
-    image = tf.pad(image, paddings, "CONSTANT", constant_values=0)
+def create_dataset(image_paths, mask_paths, batch_size):
+    dataset = tf.data.Dataset.from_tensor_slices((image_paths, mask_paths))
+    dataset = dataset.map(parse_function, num_parallel_calls=tf.data.AUTOTUNE)
+    dataset = dataset.batch(batch_size)
+    dataset = dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
+    return dataset
 
-    return image
+# Get image and mask paths
+train_image_paths = sorted([os.path.join(train_images_dir, fname) for fname in os.listdir(train_images_dir) if fname.endswith(".jpg") or fname.endswith(".png")])
+train_mask_paths = sorted([os.path.join(train_masks_dir, fname) for fname in os.listdir(train_masks_dir) if fname.endswith(".jpg") or fname.endswith(".png")])
+
+val_image_paths = sorted([os.path.join(val_images_dir, fname) for fname in os.listdir(val_images_dir) if fname.endswith(".jpg") or fname.endswith(".png")])
+val_mask_paths = sorted([os.path.join(val_masks_dir, fname) for fname in os.listdir(val_masks_dir) if fname.endswith(".jpg") or fname.endswith(".png")])
 
 print('loading datasets')
-# Load training and validation datasets
-train_images, train_masks = load_images_and_masks(train_images_dir, train_masks_dir)
-val_images, val_masks = load_images_and_masks(val_images_dir, val_masks_dir)
-
-print('normalize datasets')
-# Normalize images and masks
-train_images = train_images / 255.0
-val_images = val_images / 255.0
-train_masks = train_masks / 255.0
-val_masks = val_masks / 255.0
-
-# Ensure masks are in correct format
-train_masks = np.round(train_masks).astype(np.uint8)
-val_masks = np.round(val_masks).astype(np.uint8)
-
-print('prep datasets')
-# Prepare data generators
-train_dataset = tf.data.Dataset.from_tensor_slices((train_images, train_masks))
-train_dataset = train_dataset.batch(train_batch_size)
-
-val_dataset = tf.data.Dataset.from_tensor_slices((val_images, val_masks))
-val_dataset = val_dataset.batch(val_batch_size)
+# Create TensorFlow datasets for training and validation
+train_dataset = create_dataset(train_image_paths, train_mask_paths, train_batch_size)
+val_dataset = create_dataset(val_image_paths, val_mask_paths, val_batch_size)
 
 # Use a compatible backbone provided by KerasCV
 backbone = keras_cv.models.ResNet50Backbone(
@@ -120,13 +86,13 @@ base_model = keras_cv.models.segmentation.DeepLabV3Plus(
 print('compiling')
 # Compile model
 base_model.compile(
-    optimizer=keras.optimizers.Adam(learning_rate=0.001),
-    loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+    optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+    loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
     metrics=["accuracy"]
 )
 
 # Custom callback to log metrics to a file and print them
-class MetricsCallback(keras.callbacks.Callback):
+class MetricsCallback(tf.keras.callbacks.Callback):
     def __init__(self, log_file):
         super(MetricsCallback, self).__init__()
         self.log_file = log_file

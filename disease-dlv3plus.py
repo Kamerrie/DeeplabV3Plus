@@ -20,14 +20,15 @@ val_images_dir = os.path.join(VAL_DIR, "images")
 val_masks_dir = os.path.join(VAL_DIR, "masks")
 
 # Calculate the number of images in each split for setting batch size dynamically
-train_batch_size = len(os.listdir(train_images_dir))
-val_batch_size = len(os.listdir(val_images_dir))
+train_batch_size = 1
+val_batch_size = 1
 
 # Hyperparameters and configuration
 EPOCHS = 100  # Adjust as needed
 IMAGE_MIN_DIM = 800
 IMAGE_MAX_DIM = 1024
 NUM_CLASSES = 2  # Adjust this according to your dataset
+LEARNING_RATE = 0.001
 
 # Function to load and resize images and masks according to configuration
 def load_image(image_path, mask=False):
@@ -86,7 +87,7 @@ base_model = keras_cv.models.segmentation.DeepLabV3Plus(
 print('compiling')
 # Compile model
 base_model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+    optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE),
     loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
     metrics=["accuracy"]
 )

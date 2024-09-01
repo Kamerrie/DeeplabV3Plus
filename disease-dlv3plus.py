@@ -118,49 +118,123 @@ base_model.compile(
     ]
 )
 
-# Custom callback to log metrics to a file and print them, and save model
+# Define a custom callback for logging metrics and saving model checkpoints
 class MetricsCallback(tf.keras.callbacks.Callback):
-    def __init__(self, log_file):
+    def __init__(self, log_file, model_dir, weights_dir):
         super(MetricsCallback, self).__init__()
         self.log_file = log_file
         self.start_time = None
-        
-        # Initialize the log file with headers if it doesn't exist
+        self.best_mean_iou = 0.0  # Initialize best IoU to a low value
+        self.best_checkpoint_path = os.path.join(weights_dir, "best_model.h5")  # Path to save the best model
+        self.model_dir = model_dir
+        self.weights_dir = weights_dir
+
+        # Initialize log file with headers if it doesn't exist
         if not os.path.exists(self.log_file):
             with open(self.log_file, 'w') as f:
                 f.write("start_time,epoch,end_time,epoch_duration,loss,val_loss,mean_iou,mean_precision,mean_recall,mean_f1_score\n")
 
-    def on_epoch_begin(self, epoch, logs=None):
-        # Record the start time of the epoch
+    def on_train_begin(self, logs=None):
         self.start_time = datetime.now()
+        formatted_start_time = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
+        print(f"Training started at: {formatted_start_time}")
+
+        with open(self.log_file, 'a') as f:
+            f.write(f"{formatted_start_time},N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A\n")
 
     def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        print(f'\nEpoch {epoch + 1} Metrics:')
         end_time = datetime.now()
         epoch_duration = (end_time - self.start_time).total_seconds()
-        start_time_formatted = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
-        end_time_formatted = end_time.strftime("%Y-%m-%d %H:%M:%S")
+        formatted_end_time = end_time.strftime("%Y-%m-%d %H:%M:%S")
 
-        # Get metrics from logs
-        mean_iou = logs.get('mean_io_u', 'N/A')
-        mean_precision = logs.get('precision', 'N/A')
-        mean_recall = logs.get('recall', 'N/A')
-        mean_f1_score = logs.get('f1_score', 'N/A')  # Updated to use custom metric
+        # Save model weights after each epoch
+        model_name = f'Deeplabv3plus_epoch_{epoch + 1}.h5'
+        model_path = os.path.join(self.weights_dir, model_name)
+        self.model.save_weights(model_path)
+
+        # Evaluate model on validation data and compute custom metrics
+        val_iou, precisions, recalls, f1_scores = [], [], [], []
+
+        for val_images, val_masks in self.validation_data:
+            preds = self.model.predict(val_images)
+            preds = np.argmax(preds, axis=-1)  # Convert predictions to class indices
+            preds = np.expand_dims(preds, axis=-1)  # Ensure prediction shape matches true mask
+
+            for i in range(len(val_images)):
+                pred_mask = preds[i]
+                true_mask = val_masks[i]
+
+                intersection = np.logical_and(pred_mask, true_mask)
+                union = np.logical_or(pred_mask, true_mask)
+                iou = np.sum(intersection) / np.sum(union) if np.sum(union) > 0 else 0
+                val_iou.append(iou)
+
+                precision = np.sum(intersection) / np.sum(pred_mask) if np.sum(pred_mask) > 0 else 0
+                recall = np.sum(intersection) / np.sum(true_mask) if np.sum(true_mask) > 0 else 0
+                f1 = 2 * (precision * recall) / (precision + recall) if precision + recall > 0 else 0
+
+                precisions.append(precision)
+                recalls.append(recall)
+                f1_scores.append(f1)
+
+        # Calculate mean values for metrics
+        mean_iou_value = np.mean(val_iou)
+        mean_precision = np.mean(precisions)
+        mean_recall = np.mean(recalls)
+        mean_f1_score = np.mean(f1_scores)
+
+        # Update logs dictionary
+        logs['mean_iou'] = mean_iou_value
+        logs['mean_precision'] = mean_precision
+        logs['mean_recall'] = mean_recall
+        logs['mean_f1_score'] = mean_f1_score
+
         loss = logs.get('loss', 'N/A')
         val_loss = logs.get('val_loss', 'N/A')
 
-        # Print logs to screen
-        print(f"Epoch {epoch + 1} - Logs: {logs}")
+        # Save the best model if mean IoU improves
+        if mean_iou_value > self.best_mean_iou:
+            print(f"Mean IoU improved from {self.best_mean_iou:.4f} to {mean_iou_value:.4f}. Saving best model checkpoint.")
+            self.best_mean_iou = mean_iou_value
+            self.model.save_weights(self.best_checkpoint_path)
 
-        # Log the metrics to the file
+        # Log metrics to file
         with open(self.log_file, 'a') as f:
-            f.write(f"{start_time_formatted},{epoch + 1},{end_time_formatted},{epoch_duration:.2f},{loss},{val_loss},{mean_iou},{mean_precision},{mean_recall},{mean_f1_score}\n")
+            f.write(f"{self.start_time.strftime('%Y-%m-%d %H:%M:%S')},{epoch + 1},{formatted_end_time},{epoch_duration:.2f},{loss:.4f},{val_loss:.4f},{mean_iou_value:.4f},{mean_precision:.4f},{mean_recall:.4f},{mean_f1_score:.4f}\n")
 
-        print(f"Logged metrics for epoch {epoch + 1}")
+        self.start_time = datetime.now()
 
-        # Save the model at the end of each epoch
-        model_save_path = os.path.join(MODEL_SAVE_DIR, f"deeplabv3plus_model_epoch-{epoch + 1}")
-        self.model.save_weights(model_save_path)
-        print(f"Model saved to {model_save_path}")
+        # Print all metrics
+        for metric_name, metric_value in logs.items():
+            print(f'{metric_name}: {metric_value:.4f}')
+
+
+# Usage Example
+# Set up the directories and file paths
+LOG_SAVE_DIR = os.path.join(os.getcwd(), "dlv3plus", "logs")
+MODEL_SAVE_DIR = os.path.join(os.getcwd(), "dlv3plus", "models")
+
+os.makedirs(LOG_SAVE_DIR, exist_ok=True)
+os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
+
+log_file_path = os.path.join(LOG_SAVE_DIR, "training_log.csv")
+
+# Instantiate the callback
+metrics_callback = MetricsCallback(log_file=log_file_path, model_dir=MODEL_SAVE_DIR, weights_dir=MODEL_SAVE_DIR)
+
+print('Training will start')
+# Train the model with the custom callback
+base_model.fit(
+    train_dataset,
+    validation_data=val_dataset,
+    epochs=EPOCHS,
+    initial_epoch=initial_epoch,
+    callbacks=[metrics_callback]
+)
+print('Training done')
+
 
 os.makedirs(LOG_SAVE_DIR, exist_ok=True)
 log_file_path = os.path.join(LOG_SAVE_DIR, "training_log.csv")

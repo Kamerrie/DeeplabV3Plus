@@ -1,3 +1,4 @@
+import glob
 import os
 import numpy as np
 import tensorflow as tf
@@ -61,17 +62,6 @@ def create_dataset(image_paths, mask_paths, batch_size):
     dataset = dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
     return dataset
 
-def f1_score(y_true, y_pred):
-    y_pred = tf.keras.backend.round(y_pred)
-    tp = tf.keras.backend.sum(tf.keras.backend.cast(y_true * y_pred, 'float'), axis=[0, 1, 2])
-    fp = tf.keras.backend.sum(tf.keras.backend.cast((1 - y_true) * y_pred, 'float'), axis=[0, 1, 2])
-    fn = tf.keras.backend.sum(tf.keras.backend.cast(y_true * (1 - y_pred), 'float'), axis=[0, 1, 2])
-
-    precision = tp / (tp + fp + tf.keras.backend.epsilon())
-    recall = tp / (tp + fn + tf.keras.backend.epsilon())
-    f1 = 2 * precision * recall / (precision + recall + tf.keras.backend.epsilon())
-    return tf.keras.backend.mean(f1)
-
 # Get image and mask paths
 train_image_paths = sorted([os.path.join(train_images_dir, fname) for fname in os.listdir(train_images_dir) if fname.endswith(".jpg") or fname.endswith(".png")])
 train_mask_paths = sorted([os.path.join(train_masks_dir, fname) for fname in os.listdir(train_masks_dir) if fname.endswith(".jpg") or fname.endswith(".png")])
@@ -95,26 +85,16 @@ base_model = keras_cv.models.segmentation.DeepLabV3Plus(
     num_classes=NUM_CLASSES,
 )
 
-# Try to load the latest saved model if it exists
-latest_model_path = tf.train.latest_checkpoint(MODEL_SAVE_DIR)
-if latest_model_path:
-    print(f"Loading model from {latest_model_path}")
-    base_model.load_weights(latest_model_path)
-    initial_epoch = int(latest_model_path.split('-')[-1])
-else:
-    initial_epoch = 0
-
 print('compiling')
 # Compile model with additional metrics
 base_model.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE),
     loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False),
     metrics=[
-        "accuracy", 
-        tf.keras.metrics.MeanIoU(num_classes=NUM_CLASSES),
-        tf.keras.metrics.Precision(),
-        tf.keras.metrics.Recall(),
-        f1_score  # Custom metric for F1 Score
+        "accuracy",
+        #tf.keras.metrics.Precision(),
+        #tf.keras.metrics.Recall()
+        #f1_score  # Custom metric for F1 Score
     ]
 )
 
@@ -122,10 +102,11 @@ base_model.compile(
 class MetricsCallback(tf.keras.callbacks.Callback):
     def __init__(self, log_file, model_dir, weights_dir):
         super(MetricsCallback, self).__init__()
+        self.validation_data = val_dataset
         self.log_file = log_file
         self.start_time = None
         self.best_mean_iou = 0.0  # Initialize best IoU to a low value
-        self.best_checkpoint_path = os.path.join(weights_dir, "best_model.h5")  # Path to save the best model
+        self.best_checkpoint_path = os.path.join(weights_dir, "best_model.weights.h5")  # Path to save the best model
         self.model_dir = model_dir
         self.weights_dir = weights_dir
 
@@ -150,9 +131,9 @@ class MetricsCallback(tf.keras.callbacks.Callback):
         formatted_end_time = end_time.strftime("%Y-%m-%d %H:%M:%S")
 
         # Save model weights after each epoch
-        model_name = f'Deeplabv3plus_epoch_{epoch + 1}.h5'
+        model_name = f'Deeplabv3plus_epoch_{epoch + 1}.weights.h5'
         model_path = os.path.join(self.weights_dir, model_name)
-        self.model.save_weights(model_path)
+        #self.model.save_weights(model_path) removed in favour of checkpoints from TF
 
         # Evaluate model on validation data and compute custom metrics
         val_iou, precisions, recalls, f1_scores = [], [], [], []
@@ -165,6 +146,10 @@ class MetricsCallback(tf.keras.callbacks.Callback):
             for i in range(len(val_images)):
                 pred_mask = preds[i]
                 true_mask = val_masks[i]
+
+                # Ensure compatibility for logical operations
+                pred_mask = np.squeeze(pred_mask)
+                true_mask = np.squeeze(true_mask)
 
                 intersection = np.logical_and(pred_mask, true_mask)
                 union = np.logical_or(pred_mask, true_mask)
@@ -210,12 +195,6 @@ class MetricsCallback(tf.keras.callbacks.Callback):
         for metric_name, metric_value in logs.items():
             print(f'{metric_name}: {metric_value:.4f}')
 
-
-# Usage Example
-# Set up the directories and file paths
-LOG_SAVE_DIR = os.path.join(os.getcwd(), "dlv3plus", "logs")
-MODEL_SAVE_DIR = os.path.join(os.getcwd(), "dlv3plus", "models")
-
 os.makedirs(LOG_SAVE_DIR, exist_ok=True)
 os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
 
@@ -224,33 +203,31 @@ log_file_path = os.path.join(LOG_SAVE_DIR, "training_log.csv")
 # Instantiate the callback
 metrics_callback = MetricsCallback(log_file=log_file_path, model_dir=MODEL_SAVE_DIR, weights_dir=MODEL_SAVE_DIR)
 
+# Define checkpoint callback to save model in TensorFlow checkpoint format
+checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
+    filepath=os.path.join(MODEL_SAVE_DIR, 'ckpt_epoch_{epoch:02d}.keras'),  # Save checkpoints in MODEL_SAVE_DIR with epoch number
+    save_weights_only=False,
+    save_best_only=False,  # Save all checkpoints
+    save_freq='epoch',
+    verbose=1
+)
+# Try to load the latest saved model if it exists in TensorFlow checkpoint format
+latest_model_path = tf.train.latest_checkpoint(MODEL_SAVE_DIR)
+if latest_model_path:
+    print(f"Loading model from {latest_model_path}")
+    base_model.load_weights(latest_model_path)
+    initial_epoch = int(latest_model_path.split('_')[-1].split('.')[0])  # Extract epoch number from checkpoint filename
+else:
+    print("No model found, starting from 0")
+    initial_epoch = 0
+
 print('Training will start')
 # Train the model with the custom callback
 base_model.fit(
     train_dataset,
     validation_data=val_dataset,
     epochs=EPOCHS,
-    initial_epoch=initial_epoch,
-    callbacks=[metrics_callback]
+    #initial_epoch=initial_epoch,
+    callbacks=[metrics_callback, checkpoint_callback]
 )
 print('Training done')
-
-
-os.makedirs(LOG_SAVE_DIR, exist_ok=True)
-log_file_path = os.path.join(LOG_SAVE_DIR, "training_log.csv")
-
-# Callback instance
-metrics_callback = MetricsCallback(log_file=log_file_path)
-
-print('training will start')
-# Train the model with the custom callback and start from the latest saved epoch
-base_model.fit(
-    train_dataset,
-    validation_data=val_dataset,
-    epochs=EPOCHS,
-    initial_epoch=initial_epoch,
-    callbacks=[metrics_callback]
-)
-print('training done')
-
-print("Training completed.")

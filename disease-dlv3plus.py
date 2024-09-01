@@ -61,6 +61,17 @@ def create_dataset(image_paths, mask_paths, batch_size):
     dataset = dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
     return dataset
 
+def f1_score(y_true, y_pred):
+    y_pred = tf.keras.backend.round(y_pred)
+    tp = tf.keras.backend.sum(tf.keras.backend.cast(y_true * y_pred, 'float'), axis=[0, 1, 2])
+    fp = tf.keras.backend.sum(tf.keras.backend.cast((1 - y_true) * y_pred, 'float'), axis=[0, 1, 2])
+    fn = tf.keras.backend.sum(tf.keras.backend.cast(y_true * (1 - y_pred), 'float'), axis=[0, 1, 2])
+
+    precision = tp / (tp + fp + tf.keras.backend.epsilon())
+    recall = tp / (tp + fn + tf.keras.backend.epsilon())
+    f1 = 2 * precision * recall / (precision + recall + tf.keras.backend.epsilon())
+    return tf.keras.backend.mean(f1)
+
 # Get image and mask paths
 train_image_paths = sorted([os.path.join(train_images_dir, fname) for fname in os.listdir(train_images_dir) if fname.endswith(".jpg") or fname.endswith(".png")])
 train_mask_paths = sorted([os.path.join(train_masks_dir, fname) for fname in os.listdir(train_masks_dir) if fname.endswith(".jpg") or fname.endswith(".png")])
@@ -84,15 +95,30 @@ base_model = keras_cv.models.segmentation.DeepLabV3Plus(
     num_classes=NUM_CLASSES,
 )
 
+# Try to load the latest saved model if it exists
+latest_model_path = tf.train.latest_checkpoint(MODEL_SAVE_DIR)
+if latest_model_path:
+    print(f"Loading model from {latest_model_path}")
+    base_model.load_weights(latest_model_path)
+    initial_epoch = int(latest_model_path.split('-')[-1])
+else:
+    initial_epoch = 0
+
 print('compiling')
-# Compile model
+# Compile model with additional metrics
 base_model.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE),
-    loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-    metrics=["accuracy"]
+    loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False),
+    metrics=[
+        "accuracy", 
+        tf.keras.metrics.MeanIoU(num_classes=NUM_CLASSES),
+        tf.keras.metrics.Precision(),
+        tf.keras.metrics.Recall(),
+        f1_score  # Custom metric for F1 Score
+    ]
 )
 
-# Custom callback to log metrics to a file and print them
+# Custom callback to log metrics to a file and print them, and save model
 class MetricsCallback(tf.keras.callbacks.Callback):
     def __init__(self, log_file):
         super(MetricsCallback, self).__init__()
@@ -114,11 +140,11 @@ class MetricsCallback(tf.keras.callbacks.Callback):
         start_time_formatted = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
         end_time_formatted = end_time.strftime("%Y-%m-%d %H:%M:%S")
 
-        # Calculate additional metrics if needed (e.g., IoU, precision, recall, F1 score)
-        mean_iou = logs.get('mean_iou', 'N/A')
-        mean_precision = logs.get('mean_precision', 'N/A')
-        mean_recall = logs.get('mean_recall', 'N/A')
-        mean_f1_score = logs.get('mean_f1_score', 'N/A')
+        # Get metrics from logs
+        mean_iou = logs.get('mean_io_u', 'N/A')
+        mean_precision = logs.get('precision', 'N/A')
+        mean_recall = logs.get('recall', 'N/A')
+        mean_f1_score = logs.get('f1_score', 'N/A')  # Updated to use custom metric
         loss = logs.get('loss', 'N/A')
         val_loss = logs.get('val_loss', 'N/A')
 
@@ -131,6 +157,11 @@ class MetricsCallback(tf.keras.callbacks.Callback):
 
         print(f"Logged metrics for epoch {epoch + 1}")
 
+        # Save the model at the end of each epoch
+        model_save_path = os.path.join(MODEL_SAVE_DIR, f"deeplabv3plus_model_epoch-{epoch + 1}")
+        self.model.save_weights(model_save_path)
+        print(f"Model saved to {model_save_path}")
+
 os.makedirs(LOG_SAVE_DIR, exist_ok=True)
 log_file_path = os.path.join(LOG_SAVE_DIR, "training_log.csv")
 
@@ -138,16 +169,14 @@ log_file_path = os.path.join(LOG_SAVE_DIR, "training_log.csv")
 metrics_callback = MetricsCallback(log_file=log_file_path)
 
 print('training will start')
-# Train the model with the custom callback
+# Train the model with the custom callback and start from the latest saved epoch
 base_model.fit(
     train_dataset,
     validation_data=val_dataset,
     epochs=EPOCHS,
+    initial_epoch=initial_epoch,
     callbacks=[metrics_callback]
 )
 print('training done')
 
-os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
-base_model.save(os.path.join(MODEL_SAVE_DIR, "deeplabv3plus_model.h5"))
-
-print("Training completed and model saved.")
+print("Training completed.")

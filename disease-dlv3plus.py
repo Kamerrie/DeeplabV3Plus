@@ -1,5 +1,5 @@
-import glob
 import os
+import sys
 import numpy as np
 import tensorflow as tf
 import keras_cv
@@ -116,6 +116,7 @@ class MetricsCallback(tf.keras.callbacks.Callback):
                 f.write("start_time,epoch,end_time,epoch_duration,loss,val_loss,mean_iou,mean_precision,mean_recall,mean_f1_score\n")
 
     def on_train_begin(self, logs=None):
+        tf.keras.backend.clear_session(free_memory=True)
         self.start_time = datetime.now()
         formatted_start_time = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
         print(f"Training started at: {formatted_start_time}")
@@ -179,12 +180,6 @@ class MetricsCallback(tf.keras.callbacks.Callback):
         loss = logs.get('loss', 'N/A')
         val_loss = logs.get('val_loss', 'N/A')
 
-        # Save the best model if mean IoU improves
-        if mean_iou_value > self.best_mean_iou:
-            print(f"Mean IoU improved from {self.best_mean_iou:.4f} to {mean_iou_value:.4f}. Saving best model checkpoint.")
-            self.best_mean_iou = mean_iou_value
-            self.model.save_weights(self.best_checkpoint_path)
-
         # Log metrics to file
         with open(self.log_file, 'a') as f:
             f.write(f"{self.start_time.strftime('%Y-%m-%d %H:%M:%S')},{epoch + 1},{formatted_end_time},{epoch_duration:.2f},{loss:.4f},{val_loss:.4f},{mean_iou_value:.4f},{mean_precision:.4f},{mean_recall:.4f},{mean_f1_score:.4f}\n")
@@ -194,6 +189,9 @@ class MetricsCallback(tf.keras.callbacks.Callback):
         # Print all metrics
         for metric_name, metric_value in logs.items():
             print(f'{metric_name}: {metric_value:.4f}')
+        
+        print("Epoch completed, terminating the process to restart.")
+        sys.exit()
 
 os.makedirs(LOG_SAVE_DIR, exist_ok=True)
 os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
@@ -205,18 +203,24 @@ metrics_callback = MetricsCallback(log_file=log_file_path, model_dir=MODEL_SAVE_
 
 # Define checkpoint callback to save model in TensorFlow checkpoint format
 checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
-    filepath=os.path.join(MODEL_SAVE_DIR, 'ckpt_epoch_{epoch:02d}.keras'),  # Save checkpoints in MODEL_SAVE_DIR with epoch number
-    save_weights_only=False,
+    filepath=os.path.join(MODEL_SAVE_DIR, 'ckpt_epoch_{epoch:04d}.weights.h5'),  # Save checkpoints in MODEL_SAVE_DIR with epoch number
+    save_weights_only=True,
     save_best_only=False,  # Save all checkpoints
     save_freq='epoch',
     verbose=1
 )
-# Try to load the latest saved model if it exists in TensorFlow checkpoint format
-latest_model_path = tf.train.latest_checkpoint(MODEL_SAVE_DIR)
+# Check for the latest .h5 model file
+def get_latest_checkpoint(model_dir):
+    checkpoints = [os.path.join(model_dir, fname) for fname in os.listdir(model_dir) if fname.endswith(".h5")]
+    if checkpoints:
+        return max(checkpoints, key=os.path.getctime)  # Get the most recently created checkpoint
+    return None
+
+latest_model_path = get_latest_checkpoint(MODEL_SAVE_DIR)
 if latest_model_path:
     print(f"Loading model from {latest_model_path}")
     base_model.load_weights(latest_model_path)
-    initial_epoch = int(latest_model_path.split('_')[-1].split('.')[0])  # Extract epoch number from checkpoint filename
+    initial_epoch = int(latest_model_path.split('_')[-1].split('.')[0].split('epoch')[-1])  # Adjust as needed to parse epoch
 else:
     print("No model found, starting from 0")
     initial_epoch = 0
@@ -227,7 +231,7 @@ base_model.fit(
     train_dataset,
     validation_data=val_dataset,
     epochs=EPOCHS,
-    #initial_epoch=initial_epoch,
-    callbacks=[metrics_callback, checkpoint_callback]
+    initial_epoch=initial_epoch,
+    callbacks=[checkpoint_callback, metrics_callback]
 )
 print('Training done')

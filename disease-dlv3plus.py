@@ -14,6 +14,25 @@ TEST_DIR = os.path.join(DATASET_DIR, "test")
 LOG_SAVE_DIR = os.path.join(os.getcwd(), "dlv3plus", "logs")
 MODEL_SAVE_DIR = os.path.join(os.getcwd(), "dlv3plus", "models")
 
+BEST_MODEL_PATH = os.path.join(MODEL_SAVE_DIR, 'best_model.weights.h5')
+EPOCH_FILE_PATH = os.path.join(MODEL_SAVE_DIR, 'last_epoch.txt')
+os.makedirs(EPOCH_FILE_PATH, exist_ok=True)
+
+def read_last_epoch(file_path):
+    """Reads the last completed epoch from the file."""
+    if os.path.exists(file_path):
+        with open(file_path, 'r') as f:
+            return int(f.read().strip())
+    return 0
+
+def write_last_epoch(file_path, epoch):
+    """Writes the last completed epoch to the file."""
+    with open(file_path, 'w') as f:
+        f.write(str(epoch))
+
+# Set initial_epoch from file
+initial_epoch = read_last_epoch(EPOCH_FILE_PATH)
+
 # Set up directories for train, validation, and test images and masks
 train_images_dir = os.path.join(TRAIN_DIR, "images")
 train_masks_dir = os.path.join(TRAIN_DIR, "masks")
@@ -109,6 +128,7 @@ class MetricsCallback(tf.keras.callbacks.Callback):
         self.best_checkpoint_path = os.path.join(weights_dir, "best_model.weights.h5")  # Path to save the best model
         self.model_dir = model_dir
         self.weights_dir = weights_dir
+        self.epoch_file_path = EPOCH_FILE_PATH
 
         # Initialize log file with headers if it doesn't exist
         if not os.path.exists(self.log_file):
@@ -121,8 +141,8 @@ class MetricsCallback(tf.keras.callbacks.Callback):
         formatted_start_time = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
         print(f"Training started at: {formatted_start_time}")
 
-        with open(self.log_file, 'a') as f:
-            f.write(f"{formatted_start_time},N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A\n")
+        #with open(self.log_file, 'a') as f:
+        #    f.write(f"{formatted_start_time},N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A\n")
 
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
@@ -132,9 +152,11 @@ class MetricsCallback(tf.keras.callbacks.Callback):
         formatted_end_time = end_time.strftime("%Y-%m-%d %H:%M:%S")
 
         # Save model weights after each epoch
-        model_name = f'Deeplabv3plus_epoch_{epoch + 1}.weights.h5'
-        model_path = os.path.join(self.weights_dir, model_name)
+        #model_name = f'Deeplabv3plus_epoch_{epoch + 1}.weights.h5'
+        #model_path = os.path.join(self.weights_dir, model_name)
         #self.model.save_weights(model_path) removed in favour of checkpoints from TF
+
+        write_last_epoch(self.epoch_file, epoch + 1)
 
         # Evaluate model on validation data and compute custom metrics
         val_iou, precisions, recalls, f1_scores = [], [], [], []
@@ -209,21 +231,27 @@ checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
     save_freq='epoch',
     verbose=1
 )
-# Check for the latest .h5 model file
-def get_latest_checkpoint(model_dir):
-    checkpoints = [os.path.join(model_dir, fname) for fname in os.listdir(model_dir) if fname.endswith(".h5")]
-    if checkpoints:
-        return max(checkpoints, key=os.path.getctime)  # Get the most recently created checkpoint
-    return None
 
-latest_model_path = get_latest_checkpoint(MODEL_SAVE_DIR)
-if latest_model_path:
-    print(f"Loading model from {latest_model_path}")
-    base_model.load_weights(latest_model_path)
-    initial_epoch = int(latest_model_path.split('_')[-1].split('.')[0].split('epoch')[-1])  # Adjust as needed to parse epoch
+# This one we'll use for the model to train with.
+best_checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
+    filepath=BEST_MODEL_PATH,  # Save the best model with a fixed name
+    monitor='val_loss',  # Or 'val_mean_iou' depending on your metric of interest
+    save_best_only=True,  # Only save the model if the monitored metric is improved
+    save_weights_only=True,
+    mode='min',  # Use 'min' for 'val_loss' or 'max' for 'val_mean_iou'
+    verbose=1
+)
+
+# Check for the best model file
+if os.path.exists(BEST_MODEL_PATH):
+    print(f"Loading best model from {BEST_MODEL_PATH}")
+    base_model.load_weights(BEST_MODEL_PATH)
+    
+    initial_epoch = read_last_epoch(EPOCH_FILE_PATH)
 else:
-    print("No model found, starting from 0")
+    print("No best model found, starting from epoch 0")
     initial_epoch = 0
+
 
 print('Training will start')
 # Train the model with the custom callback
@@ -232,6 +260,6 @@ base_model.fit(
     validation_data=val_dataset,
     epochs=EPOCHS,
     initial_epoch=initial_epoch,
-    callbacks=[checkpoint_callback, metrics_callback]
+    callbacks=[checkpoint_callback, best_checkpoint_callback, metrics_callback]
 )
 print('Training done')

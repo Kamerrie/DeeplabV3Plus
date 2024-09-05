@@ -113,7 +113,7 @@ def visualize_and_save_results(test_images, test_masks, preds, idx):
 
     # Overlay the predicted mask on the original image with proper alpha blending
     ax[3].imshow(test_images[0])  # Display original image
-    ax[3].imshow(np.squeeze(preds[0]), cmap="jet", alpha=0.5, interpolation='none')  # Overlay predicted mask with transparency
+    ax[3].imshow(np.squeeze(preds[0]), cmap="gray", alpha=0.5, interpolation='none')  # Overlay predicted mask with transparency
     ax[3].set_title("Overlay of Predicted Mask")
     ax[3].axis("off")
 

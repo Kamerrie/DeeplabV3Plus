@@ -164,16 +164,24 @@ labels = np.array([["{0:.0f} ({1:.1f}%)".format(value, percentage) for value, pe
 print("\nClassification Report:")
 print(classification_report(all_trues, all_preds, target_names=["Background", "Disease"]))
 
-# Plot and save the confusion matrix with percentages
+# Confusion Matrix Visualization Code
 plt.figure(figsize=(8, 6))
-sns.heatmap(conf_matrix, annot=labels, fmt='', cmap='Blues', xticklabels=["Background", "Disease"], yticklabels=["Background", "Disease"])
-plt.xlabel('Predicted')
-plt.ylabel('True')
+sns.heatmap(
+    conf_matrix, 
+    annot=labels, 
+    fmt='', 
+    cmap='Blues', 
+    xticklabels=["Background", "Disease"], 
+    yticklabels=["Background", "Disease"]
+)
+plt.ylabel('Predicted')
+plt.xlabel('True')
 plt.title('Confusion Matrix (Counts and Percentages)')
 conf_matrix_path = os.path.join(VISUALIZATION_DIR, 'confusion_matrix_with_percentages.png')
 plt.savefig(conf_matrix_path)
 plt.close()
 print(f"Saved confusion matrix with percentages to {conf_matrix_path}")
+
 
 # Save evaluation metrics to a file
 results_file_path = os.path.join(MODEL_SAVE_DIR, 'evaluation_results.txt')

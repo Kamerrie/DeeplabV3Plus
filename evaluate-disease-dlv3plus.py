@@ -4,6 +4,7 @@ import tensorflow as tf
 import keras_cv
 import matplotlib.pyplot as plt
 from sklearn.metrics import classification_report, confusion_matrix
+import seaborn as sns
 
 # Set paths and configurations
 DATASET_DIR = os.path.join(os.getcwd(), "data")
@@ -110,12 +111,13 @@ def visualize_and_save_results(test_images, test_masks, preds, idx):
     ax[2].set_title("Predicted Mask")
     ax[2].axis("off")
 
-    ax[3].imshow(test_images[0])
+    ax[3].imshow(test_images[0].astype(np.uint8))  # Convert image back to uint8 for proper display
     ax[3].imshow(np.squeeze(preds[0]), cmap="jet", alpha=0.5)  # Overlay predicted mask on image
     ax[3].set_title("Overlay of Predicted Mask")
     ax[3].axis("off")
 
     plt.tight_layout()
+    plt.subplots_adjust(top=0.85)  # Adjust layout to prevent cut-off titles
     save_path = os.path.join(VISUALIZATION_DIR, f"result_{idx:04d}.png")
     plt.savefig(save_path)
     plt.close()
@@ -149,10 +151,29 @@ all_trues = np.concatenate(all_trues, axis=0).flatten()
 
 # Calculate and display the confusion matrix and classification report
 print("\nConfusion Matrix:")
-print(confusion_matrix(all_trues, all_preds))
+conf_matrix = confusion_matrix(all_trues, all_preds)
+print(conf_matrix)
+
+# Calculate the percentage confusion matrix
+conf_matrix_percentage = conf_matrix.astype('float') / conf_matrix.sum(axis=1)[:, np.newaxis] * 100
+
+# Combine raw numbers and percentages for confusion matrix display
+labels = np.array([["{0:.0f} ({1:.1f}%)".format(value, percentage) for value, percentage in zip(row, row_percentages)] 
+                   for row, row_percentages in zip(conf_matrix, conf_matrix_percentage)])
 
 print("\nClassification Report:")
-print(classification_report(all_trues, all_preds, target_names=["Class 0", "Class 1"]))
+print(classification_report(all_trues, all_preds, target_names=["Background", "Disease"]))
+
+# Plot and save the confusion matrix with percentages
+plt.figure(figsize=(8, 6))
+sns.heatmap(conf_matrix, annot=labels, fmt='', cmap='Blues', xticklabels=["Background", "Disease"], yticklabels=["Background", "Disease"])
+plt.xlabel('Predicted')
+plt.ylabel('True')
+plt.title('Confusion Matrix (Counts and Percentages)')
+conf_matrix_path = os.path.join(VISUALIZATION_DIR, 'confusion_matrix_with_percentages.png')
+plt.savefig(conf_matrix_path)
+plt.close()
+print(f"Saved confusion matrix with percentages to {conf_matrix_path}")
 
 # Save evaluation metrics to a file
 results_file_path = os.path.join(MODEL_SAVE_DIR, 'evaluation_results.txt')
@@ -163,6 +184,6 @@ with open(results_file_path, 'w') as f:
 # Optionally, save the confusion matrix and classification report to a file
 with open(results_file_path, 'a') as f:
     f.write("\nConfusion Matrix:\n")
-    f.write(np.array2string(confusion_matrix(all_trues, all_preds)))
+    f.write(np.array2string(conf_matrix))
     f.write("\n\nClassification Report:\n")
-    f.write(classification_report(all_trues, all_preds, target_names=["Class 0", "Class 1"]))
+    f.write(classification_report(all_trues, all_preds, target_names=["Background", "Disease"]))

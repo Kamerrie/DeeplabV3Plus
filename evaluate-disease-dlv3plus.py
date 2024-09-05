@@ -3,7 +3,7 @@ import numpy as np
 import tensorflow as tf
 import keras_cv
 import matplotlib.pyplot as plt
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report, confusion_matrix, jaccard_score
 import seaborn as sns
 
 # Set paths and configurations
@@ -111,8 +111,9 @@ def visualize_and_save_results(test_images, test_masks, preds, idx):
     ax[2].set_title("Predicted Mask")
     ax[2].axis("off")
 
-    ax[3].imshow(test_images[0].astype(np.uint8))  # Convert image back to uint8 for proper display
-    ax[3].imshow(np.squeeze(preds[0]), cmap="jet", alpha=0.5)  # Overlay predicted mask on image
+    # Overlay the predicted mask on the original image with proper alpha blending
+    ax[3].imshow(test_images[0])  # Display original image
+    ax[3].imshow(np.squeeze(preds[0]), cmap="jet", alpha=0.5, interpolation='none')  # Overlay predicted mask with transparency
     ax[3].set_title("Overlay of Predicted Mask")
     ax[3].axis("off")
 
@@ -154,15 +155,26 @@ print("\nConfusion Matrix:")
 conf_matrix = confusion_matrix(all_trues, all_preds)
 print(conf_matrix)
 
-# Calculate the percentage confusion matrix
+# Calculate percentages for confusion matrix
 conf_matrix_percentage = conf_matrix.astype('float') / conf_matrix.sum(axis=1)[:, np.newaxis] * 100
 
-# Combine raw numbers and percentages for confusion matrix display
-labels = np.array([["{0:.0f} ({1:.1f}%)".format(value, percentage) for value, percentage in zip(row, row_percentages)] 
-                   for row, row_percentages in zip(conf_matrix, conf_matrix_percentage)])
+# Extract TP, FP, FN, TN for binary classification
+TN, FP, FN, TP = conf_matrix.ravel()
 
-print("\nClassification Report:")
-print(classification_report(all_trues, all_preds, target_names=["Background", "Disease"]))
+print(f"True Positives (TP): {TP}")
+print(f"False Positives (FP): {FP}")
+print(f"False Negatives (FN): {FN}")
+print(f"True Negatives (TN): {TN}")
+
+# Calculate IoU (Jaccard Index) for binary classification
+iou = jaccard_score(all_trues, all_preds, average='binary')
+print(f"\nIoU (Jaccard Index): {iou:.4f}")
+
+# Prepare labels for the confusion matrix
+labels = np.array([
+    [f"TN\n{conf_matrix[0, 0]} ({conf_matrix_percentage[0, 0]:.1f}%)", f"FP\n{conf_matrix[0, 1]} ({conf_matrix_percentage[0, 1]:.1f}%)"],
+    [f"FN\n{conf_matrix[1, 0]} ({conf_matrix_percentage[1, 0]:.1f}%)", f"TP\n{conf_matrix[1, 1]} ({conf_matrix_percentage[1, 1]:.1f}%)"]
+])
 
 # Confusion Matrix Visualization Code
 plt.figure(figsize=(8, 6))
@@ -174,14 +186,13 @@ sns.heatmap(
     xticklabels=["Background", "Disease"], 
     yticklabels=["Background", "Disease"]
 )
-plt.ylabel('Predicted')
-plt.xlabel('True')
-plt.title('Confusion Matrix (Counts and Percentages)')
-conf_matrix_path = os.path.join(VISUALIZATION_DIR, 'confusion_matrix_with_percentages.png')
+plt.xlabel('Predicted')
+plt.ylabel('Ground Truth')
+plt.title('Confusion Matrix')
+conf_matrix_path = os.path.join(VISUALIZATION_DIR, 'confusion_matrix.png')
 plt.savefig(conf_matrix_path)
 plt.close()
-print(f"Saved confusion matrix with percentages to {conf_matrix_path}")
-
+print(f"Saved confusion matrix with counts and percentages to {conf_matrix_path}")
 
 # Save evaluation metrics to a file
 results_file_path = os.path.join(MODEL_SAVE_DIR, 'evaluation_results.txt')
@@ -193,5 +204,12 @@ with open(results_file_path, 'w') as f:
 with open(results_file_path, 'a') as f:
     f.write("\nConfusion Matrix:\n")
     f.write(np.array2string(conf_matrix))
+    f.write(f"\n\nTrue Positives (TP): {TP}\n")
+    f.write(f"False Positives (FP): {FP}\n")
+    f.write(f"False Negatives (FN): {FN}\n")
+    f.write(f"True Negatives (TN): {TN}\n")
+    f.write(f"IoU (Jaccard Index): {iou:.4f}\n")
     f.write("\n\nClassification Report:\n")
     f.write(classification_report(all_trues, all_preds, target_names=["Background", "Disease"]))
+
+print("All evaluation metrics saved.")

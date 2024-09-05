@@ -15,8 +15,16 @@ LOG_SAVE_DIR = os.path.join(os.getcwd(), "dlv3plus", "logs")
 MODEL_SAVE_DIR = os.path.join(os.getcwd(), "dlv3plus", "models")
 
 BEST_MODEL_PATH = os.path.join(MODEL_SAVE_DIR, 'best_model.weights.h5')
+BEST_VAL_LOSS_FILE = os.path.join(MODEL_SAVE_DIR, "best_val_loss.txt")
 EPOCH_FILE_PATH = os.path.join(MODEL_SAVE_DIR, 'last_epoch.txt')
-os.makedirs(EPOCH_FILE_PATH, exist_ok=True)
+# Set initial_epoch to 0 just in case
+initial_epoch = 0
+
+if os.path.exists(BEST_VAL_LOSS_FILE):
+    with open(BEST_VAL_LOSS_FILE, 'r') as f:
+        best_val_loss = float(f.read().strip())
+else:
+    best_val_loss = np.inf
 
 def read_last_epoch(file_path):
     """Reads the last completed epoch from the file."""
@@ -30,8 +38,6 @@ def write_last_epoch(file_path, epoch):
     with open(file_path, 'w') as f:
         f.write(str(epoch))
 
-# Set initial_epoch from file
-initial_epoch = read_last_epoch(EPOCH_FILE_PATH)
 
 # Set up directories for train, validation, and test images and masks
 train_images_dir = os.path.join(TRAIN_DIR, "images")
@@ -129,6 +135,7 @@ class MetricsCallback(tf.keras.callbacks.Callback):
         self.model_dir = model_dir
         self.weights_dir = weights_dir
         self.epoch_file_path = EPOCH_FILE_PATH
+        self.best_val_loss = best_val_loss
 
         # Initialize log file with headers if it doesn't exist
         if not os.path.exists(self.log_file):
@@ -151,12 +158,26 @@ class MetricsCallback(tf.keras.callbacks.Callback):
         epoch_duration = (end_time - self.start_time).total_seconds()
         formatted_end_time = end_time.strftime("%Y-%m-%d %H:%M:%S")
 
+        loss = logs.get('loss', 'N/A')
+        val_loss = logs.get('val_loss', 'N/A')
+
+        if val_loss is not None and val_loss < self.best_val_loss:
+            print(f"Validation loss improved from {self.best_val_loss} to {val_loss}. Saving best model.")
+            self.best_val_loss = val_loss  # Update the best validation loss
+
+            # Save the model
+            self.model.save_weights(os.path.join(self.weights_dir, "best_model.weights.h5"))
+
+            # Persist the new best validation loss to a file
+            with open(BEST_VAL_LOSS_FILE, 'w') as f:
+                f.write(str(self.best_val_loss))
+
         # Save model weights after each epoch
         #model_name = f'Deeplabv3plus_epoch_{epoch + 1}.weights.h5'
         #model_path = os.path.join(self.weights_dir, model_name)
         #self.model.save_weights(model_path) removed in favour of checkpoints from TF
 
-        write_last_epoch(self.epoch_file, epoch + 1)
+        write_last_epoch(self.epoch_file_path, epoch + 1)
 
         # Evaluate model on validation data and compute custom metrics
         val_iou, precisions, recalls, f1_scores = [], [], [], []
@@ -199,9 +220,6 @@ class MetricsCallback(tf.keras.callbacks.Callback):
         logs['mean_recall'] = mean_recall
         logs['mean_f1_score'] = mean_f1_score
 
-        loss = logs.get('loss', 'N/A')
-        val_loss = logs.get('val_loss', 'N/A')
-
         # Log metrics to file
         with open(self.log_file, 'a') as f:
             f.write(f"{self.start_time.strftime('%Y-%m-%d %H:%M:%S')},{epoch + 1},{formatted_end_time},{epoch_duration:.2f},{loss:.4f},{val_loss:.4f},{mean_iou_value:.4f},{mean_precision:.4f},{mean_recall:.4f},{mean_f1_score:.4f}\n")
@@ -232,16 +250,6 @@ checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
     verbose=1
 )
 
-# This one we'll use for the model to train with.
-best_checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
-    filepath=BEST_MODEL_PATH,  # Save the best model with a fixed name
-    monitor='val_loss',  # Or 'val_mean_iou' depending on your metric of interest
-    save_best_only=True,  # Only save the model if the monitored metric is improved
-    save_weights_only=True,
-    mode='min',  # Use 'min' for 'val_loss' or 'max' for 'val_mean_iou'
-    verbose=1
-)
-
 # Check for the best model file
 if os.path.exists(BEST_MODEL_PATH):
     print(f"Loading best model from {BEST_MODEL_PATH}")
@@ -260,6 +268,6 @@ base_model.fit(
     validation_data=val_dataset,
     epochs=EPOCHS,
     initial_epoch=initial_epoch,
-    callbacks=[checkpoint_callback, best_checkpoint_callback, metrics_callback]
+    callbacks=[checkpoint_callback, metrics_callback]
 )
 print('Training done')

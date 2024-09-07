@@ -273,11 +273,14 @@ else:
 
 print('Training will start')
 # Start training the model
-base_model.fit(
+if(read_wait_counter(WAIT_COUNTER_FILE) < 10):
+    base_model.fit(
     train_dataset,
     validation_data=val_dataset,
     epochs=EPOCHS,
     initial_epoch=initial_epoch,
     callbacks=[checkpoint_callback, metrics_callback]
 )
+else:
+    print("early stopping point")
 print('Training done')

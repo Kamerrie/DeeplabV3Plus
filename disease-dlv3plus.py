@@ -239,6 +239,8 @@ class MetricsCallback(tf.keras.callbacks.Callback):
         # Print all metrics
         for metric_name, metric_value in logs.items():
             print(f'{metric_name}: {metric_value:.4f}')
+        print("Epoch completed, terminating the process to restart.")
+        sys.exit()
 
 
 # Set up the log and model directories

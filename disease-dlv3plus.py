@@ -15,29 +15,43 @@ LOG_SAVE_DIR = os.path.join(os.getcwd(), "dlv3plus", "logs")
 MODEL_SAVE_DIR = os.path.join(os.getcwd(), "dlv3plus", "models")
 
 BEST_MODEL_PATH = os.path.join(MODEL_SAVE_DIR, 'best_model.weights.h5')
-BEST_VAL_LOSS_FILE = os.path.join(MODEL_SAVE_DIR, "best_val_loss.txt")
+BEST_IOU_FILE = os.path.join(MODEL_SAVE_DIR, "best_mean_iou.txt")
+WAIT_COUNTER_FILE = os.path.join(MODEL_SAVE_DIR, 'wait_counter.txt')
 EPOCH_FILE_PATH = os.path.join(MODEL_SAVE_DIR, 'last_epoch.txt')
-# Set initial_epoch to 0 just in case
-initial_epoch = 0
 
-if os.path.exists(BEST_VAL_LOSS_FILE):
-    with open(BEST_VAL_LOSS_FILE, 'r') as f:
-        best_val_loss = float(f.read().strip())
+# Initialize best IoU and wait counter
+if os.path.exists(BEST_IOU_FILE):
+    with open(BEST_IOU_FILE, 'r') as f:
+        best_mean_iou = float(f.read().strip())
 else:
-    best_val_loss = np.inf
+    best_mean_iou = 0.0
 
+if os.path.exists(WAIT_COUNTER_FILE):
+    with open(WAIT_COUNTER_FILE, 'r') as f:
+        wait_counter = int(f.read().strip())
+else:
+    wait_counter = 0
+
+# Helper functions to read/write epoch and wait counter
 def read_last_epoch(file_path):
-    """Reads the last completed epoch from the file."""
     if os.path.exists(file_path):
         with open(file_path, 'r') as f:
             return int(f.read().strip())
     return 0
 
 def write_last_epoch(file_path, epoch):
-    """Writes the last completed epoch to the file."""
     with open(file_path, 'w') as f:
         f.write(str(epoch))
 
+def read_wait_counter(file_path):
+    if os.path.exists(file_path):
+        with open(file_path, 'r') as f:
+            return int(f.read().strip())
+    return 0
+
+def write_wait_counter(file_path, wait):
+    with open(file_path, 'w') as f:
+        f.write(str(wait))
 
 # Set up directories for train, validation, and test images and masks
 train_images_dir = os.path.join(TRAIN_DIR, "images")
@@ -117,39 +131,32 @@ base_model.compile(
     loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False),
     metrics=[
         "accuracy",
-        #tf.keras.metrics.Precision(),
-        #tf.keras.metrics.Recall()
-        #f1_score  # Custom metric for F1 Score
     ]
 )
 
-# Define a custom callback for logging metrics and saving model checkpoints
+# Define the custom callback for saving based on mean IoU and managing early stopping
 class MetricsCallback(tf.keras.callbacks.Callback):
-    def __init__(self, log_file, model_dir, weights_dir):
+    def __init__(self, log_file, model_dir, weights_dir, patience=10):
         super(MetricsCallback, self).__init__()
         self.validation_data = val_dataset
         self.log_file = log_file
         self.start_time = None
-        self.best_mean_iou = 0.0  # Initialize best IoU to a low value
+        self.best_mean_iou = best_mean_iou  # Initialize with the best IoU from file
         self.best_checkpoint_path = os.path.join(weights_dir, "best_model.weights.h5")  # Path to save the best model
         self.model_dir = model_dir
         self.weights_dir = weights_dir
         self.epoch_file_path = EPOCH_FILE_PATH
-        self.best_val_loss = best_val_loss
+        self.patience = patience  # Early stopping patience
+        self.wait = wait_counter  # Initialize the wait counter from file
 
-        # Initialize log file with headers if it doesn't exist
         if not os.path.exists(self.log_file):
             with open(self.log_file, 'w') as f:
                 f.write("start_time,epoch,end_time,epoch_duration,loss,val_loss,mean_iou,mean_precision,mean_recall,mean_f1_score\n")
 
     def on_train_begin(self, logs=None):
-        tf.keras.backend.clear_session(free_memory=True)
         self.start_time = datetime.now()
         formatted_start_time = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
         print(f"Training started at: {formatted_start_time}")
-
-        #with open(self.log_file, 'a') as f:
-        #    f.write(f"{formatted_start_time},N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A\n")
 
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
@@ -158,25 +165,7 @@ class MetricsCallback(tf.keras.callbacks.Callback):
         epoch_duration = (end_time - self.start_time).total_seconds()
         formatted_end_time = end_time.strftime("%Y-%m-%d %H:%M:%S")
 
-        loss = logs.get('loss', 'N/A')
-        val_loss = logs.get('val_loss', 'N/A')
-
-        if val_loss is not None and val_loss < self.best_val_loss:
-            print(f"Validation loss improved from {self.best_val_loss} to {val_loss}. Saving best model.")
-            self.best_val_loss = val_loss  # Update the best validation loss
-
-            # Save the model
-            self.model.save_weights(os.path.join(self.weights_dir, "best_model.weights.h5"))
-
-            # Persist the new best validation loss to a file
-            with open(BEST_VAL_LOSS_FILE, 'w') as f:
-                f.write(str(self.best_val_loss))
-
-        # Save model weights after each epoch
-        #model_name = f'Deeplabv3plus_epoch_{epoch + 1}.weights.h5'
-        #model_path = os.path.join(self.weights_dir, model_name)
-        #self.model.save_weights(model_path) removed in favour of checkpoints from TF
-
+        # Save the last completed epoch
         write_last_epoch(self.epoch_file_path, epoch + 1)
 
         # Evaluate model on validation data and compute custom metrics
@@ -220,49 +209,67 @@ class MetricsCallback(tf.keras.callbacks.Callback):
         logs['mean_recall'] = mean_recall
         logs['mean_f1_score'] = mean_f1_score
 
+        # Check if the mean IoU improved
+        if mean_iou_value > self.best_mean_iou:
+            print(f"Mean IoU improved from {self.best_mean_iou} to {mean_iou_value}. Saving best model.")
+            self.best_mean_iou = mean_iou_value
+            self.wait = 0  # Reset wait counter if IoU improves
+
+            # Save the best model
+            self.model.save_weights(self.best_checkpoint_path)
+
+            # Persist the best IoU to a file
+            with open(BEST_IOU_FILE, 'w') as f:
+                f.write(str(self.best_mean_iou))
+
+        else:
+            self.wait += 1  # Increment the wait counter
+            write_wait_counter(WAIT_COUNTER_FILE, self.wait)  # Persist the wait counter
+
+            if self.wait >= self.patience:
+                print(f"Stopping training after {self.wait} epochs without improvement in IoU.")
+                self.model.stop_training = True
+
         # Log metrics to file
         with open(self.log_file, 'a') as f:
-            f.write(f"{self.start_time.strftime('%Y-%m-%d %H:%M:%S')},{epoch + 1},{formatted_end_time},{epoch_duration:.2f},{loss:.4f},{val_loss:.4f},{mean_iou_value:.4f},{mean_precision:.4f},{mean_recall:.4f},{mean_f1_score:.4f}\n")
+            f.write(f"{self.start_time.strftime('%Y-%m-%d %H:%M:%S')},{epoch + 1},{formatted_end_time},{epoch_duration:.2f},{logs.get('loss', 'N/A'):.4f},{logs.get('val_loss', 'N/A'):.4f},{mean_iou_value:.4f},{mean_precision:.4f},{mean_recall:.4f},{mean_f1_score:.4f}\n")
 
         self.start_time = datetime.now()
 
         # Print all metrics
         for metric_name, metric_value in logs.items():
             print(f'{metric_name}: {metric_value:.4f}')
-        
-        print("Epoch completed, terminating the process to restart.")
-        sys.exit()
 
+
+# Set up the log and model directories
 os.makedirs(LOG_SAVE_DIR, exist_ok=True)
 os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
 
 log_file_path = os.path.join(LOG_SAVE_DIR, "training_log.csv")
 
-# Instantiate the callback
+# Instantiate the custom callback
 metrics_callback = MetricsCallback(log_file=log_file_path, model_dir=MODEL_SAVE_DIR, weights_dir=MODEL_SAVE_DIR)
 
-# Define checkpoint callback to save model in TensorFlow checkpoint format
+# Define a checkpoint callback to save TensorFlow checkpoints
 checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
-    filepath=os.path.join(MODEL_SAVE_DIR, 'ckpt_epoch_{epoch:04d}.weights.h5'),  # Save checkpoints in MODEL_SAVE_DIR with epoch number
+    filepath=os.path.join(MODEL_SAVE_DIR, 'ckpt_epoch_{epoch:04d}.weights.h5'),
     save_weights_only=True,
-    save_best_only=False,  # Save all checkpoints
+    save_best_only=False,
     save_freq='epoch',
     verbose=1
 )
 
-# Check for the best model file
+# Check for the best model file and the last epoch
 if os.path.exists(BEST_MODEL_PATH):
     print(f"Loading best model from {BEST_MODEL_PATH}")
     base_model.load_weights(BEST_MODEL_PATH)
-    
     initial_epoch = read_last_epoch(EPOCH_FILE_PATH)
 else:
     print("No best model found, starting from epoch 0")
     initial_epoch = 0
 
-
 print('Training will start')
-# Train the model with the custom callback
+# Start training the model
 base_model.fit(
     train_dataset,
     validation_data=val_dataset,

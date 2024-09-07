@@ -224,11 +224,12 @@ class MetricsCallback(tf.keras.callbacks.Callback):
 
         else:
             self.wait += 1  # Increment the wait counter
-            write_wait_counter(WAIT_COUNTER_FILE, self.wait)  # Persist the wait counter
 
             if self.wait >= self.patience:
                 print(f"Stopping training after {self.wait} epochs without improvement in IoU.")
                 self.model.stop_training = True
+        
+        write_wait_counter(WAIT_COUNTER_FILE, self.wait)  # Persist the wait counter
 
         # Log metrics to file
         with open(self.log_file, 'a') as f:
